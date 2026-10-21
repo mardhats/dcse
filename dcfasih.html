@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCFasihSM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#f6efe6; --card:#fffaf3; --ink:#2b211c; --muted:#7a6a5f;
+  --terra:#b5532f; --terra-d:#933f20; --line:#dccdbd; --ok:#4d6b3a;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--paper); color:var(--ink);
+  font:16px/1.55 "DM Sans",system-ui,sans-serif;
+  padding:48px 20px 80px;
+}
+main{max-width:720px;margin:0 auto}
+h1{
+  font:700 38px/1.15 "Playfair Display",Georgia,serif;
+  margin:0 0 10px; letter-spacing:-.01em;
+}
+.lede{color:var(--muted);margin:0 0 32px;max-width:56ch}
+label{display:block;font-weight:600;margin-bottom:6px}
+textarea,input{
+  width:100%; font:inherit; color:inherit;
+  background:var(--card); border:1px solid var(--line); border-radius:6px;
+  padding:12px 14px;
+}
+textarea{min-height:220px;resize:vertical;font-size:14px;line-height:1.5}
+textarea:focus,input:focus,button:focus-visible{outline:2px solid var(--terra);outline-offset:1px}
+.row{display:grid;grid-template-columns:1fr 120px;gap:16px;margin:20px 0 28px}
+.hint{color:var(--muted);font-size:14px;margin-top:6px}
+.actions{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+button{
+  font:inherit;font-weight:600;cursor:pointer;border-radius:6px;padding:13px 22px;
+  border:1px solid var(--terra);background:var(--terra);color:#fff;
+}
+button:hover:not(:disabled){background:var(--terra-d)}
+button:disabled{opacity:.5;cursor:default}
+button.ghost{background:transparent;color:var(--terra)}
+button.ghost:hover:not(:disabled){background:#f0e2d3}
+.status{margin-top:28px;border-top:1px solid var(--line);padding-top:20px}
+.bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin:10px 0}
+.bar > div{height:100%;width:0;background:var(--terra);transition:width .25s}
+.msg{margin-top:14px;padding:12px 14px;border-radius:6px;background:#f7e1d6;border:1px solid #e2b9a5;display:none}
+.msg.show{display:block}
+.bad{margin-top:14px;font-size:14px;color:var(--muted);word-break:break-all}
+@media (prefers-reduced-motion:reduce){.bar > div{transition:none}}
+@media (max-width:520px){.row{grid-template-columns:1fr}h1{font-size:30px}}
+</style>
+</head>
+<body>
+<main>
+  <h1></h1>
+  <p class="lede"></p>
+
+  <label for="links">Daftar link</label>
+  <textarea id="links" placeholder="Satu link per baris"></textarea>
+
+  <div class="row">
+    <div>
+      <label for="survey">ID survei (bagian tengah URL)</label>
+      <input id="survey" value="fd68e454-ba45-4b85-8205-f3bf777ded24" spellcheck="false">
+    </div>
+    <div>
+      <label for="batch">Per batch</label>
+      <input id="batch" type="number" min="1" max="50" value="10">
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="go"></button>
+    <button id="reset" class="ghost">Mulai dari awal</button>
+  </div>
+
+  <div id="blocked" class="msg" role="alert">
+    Chrome memblokir popup. Klik ikon popup di ujung kanan address bar, pilih <b>Always allow pop-ups</b>, lalu tekan tombol lagi. Proses lanjut dari link yang belum terbuka.
+  </div>
+
+  <div class="status">
+    <div id="count"></div>
+    <div class="bar"><div id="fill"></div></div>
+    <div id="bad" class="bad"></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const BASE = "https://fasih-sm.bps.go.id/app/assignment/";
+const KEY = "buka-tab-fasih";
+const DELAY = 400;
+
+let queue = [], bad = [], pos = 0, parsedFrom = null, running = false;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function save(){
+  try{
+    localStorage.setItem(KEY, JSON.stringify({
+      text: $("links").value, survey: $("survey").value,
+      batch: $("batch").value, pos
+    }));
+  }catch(e){}
+}
+function load(){
+  try{
+    const s = JSON.parse(localStorage.getItem(KEY) || "null");
+    if(!s) return;
+    $("links").value = s.text || "";
+    if(s.survey) $("survey").value = s.survey;
+    if(s.batch) $("batch").value = s.batch;
+    parse();
+    pos = Math.min(s.pos || 0, queue.length);
+  }catch(e){}
+}
+
+function parse(){
+  const seen = new Set();
+  queue = []; bad = [];
+  $("links").value.split(/\s+/).filter(Boolean).forEach(tok => {
+    const m = tok.match(/assignment-detail\/([0-9a-f-]{36})/i);
+    const id = (m ? m[1] : (tok.match(UUID) || []).pop() || "").toLowerCase();
+    if(!id){ bad.push(tok); return; }
+    if(seen.has(id)) return;
+    seen.add(id); queue.push(id);
+  });
+  parsedFrom = $("links").value;
+}
+
+function urlFor(id){
+  return BASE + $("survey").value.trim() + "/" + id + "/edit";
+}
+
+function render(){
+  const n = Math.max(1, parseInt($("batch").value) || 10);
+  const left = queue.length - pos;
+  $("count").textContent = queue.length
+    ? `${pos} dari ${queue.length} link sudah dibuka, sisa ${left}`
+    : "Belum ada link valid";
+  $("fill").style.width = queue.length ? (pos / queue.length * 100) + "%" : "0";
+  $("go").textContent = left > 0 ? `Buka ${Math.min(n, left)} tab berikutnya` : "Semua link sudah dibuka";
+  $("go").disabled = running || left <= 0;
+  $("bad").textContent = bad.length
+    ? `${bad.length} baris dilewati karena tidak ada ID: ${bad.slice(0,5).join(", ")}${bad.length > 5 ? " …" : ""}`
+    : "";
+}
+
+async function openBatch(){
+  if(parsedFrom !== $("links").value){ parse(); pos = 0; }
+  const n = Math.max(1, parseInt($("batch").value) || 10);
+  const slice = queue.slice(pos, pos + n);
+  if(!slice.length){ render(); return; }
+  $("blocked").classList.remove("show");
+  running = true; render();
+  for(const id of slice){
+    const w = window.open(urlFor(id), "_blank");
+    if(!w){ $("blocked").classList.add("show"); break; }
+    pos++; save(); render();
+    await sleep(DELAY);
+  }
+  running = false; save(); render();
+}
+
+$("go").addEventListener("click", openBatch);
+$("reset").addEventListener("click", () => { pos = 0; parse(); save(); render(); $("blocked").classList.remove("show"); });
+$("links").addEventListener("input", () => { parse(); pos = 0; save(); render(); });
+$("survey").addEventListener("input", save);
+$("batch").addEventListener("input", () => { save(); render(); });
+
+load(); render();
+</script>
+</body>
+</html>
